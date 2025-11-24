@@ -1,602 +1,415 @@
-#include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <stdbool.h>
 #include <string.h>
+#include <ctype.h>
+#include <inttypes.h>
+#include <errno.h>
 
+#define MEM_SIZE (1<<20)   /* 1MB memory */
+typedef enum { STAT_AOK=1, STAT_HLT=2, STAT_ADR=3, STAT_INS=4 } stat_t;
 
-int BUFF_SIZE = 1000000; //this is 1 MB 
-char buff[1000000];
-int size = 524288; //2^19
-char mem[524288];
-int status; 
+enum { RAX=0, RCX, RDX, RBX, RSP, RBP, RSI, RDI,
+       R8, R9, R10, R11, R12, R13, R14, RNONE=15 };
 
-//寄存器
-typedef struct {
-	int rax; int eax;
-	int rbx; int ebx;
-    int rcx; int ecx;
-	int rdx; int edx; 
+enum {
+    I_HALT=0, I_NOP=1, I_RRMOVQ=2, I_IRMOVQ=3, I_RMMOVQ=4,
+    I_MRMOVQ=5, I_OPQ=6, I_JXX=7, I_CALL=8,
+    I_RET=9, I_PUSHQ=0xA, I_POPQ=0xB
+};
 
-	int rsi; int esi;
-	int rdi; int edi;
-	int rsp; int esp; 
-	int rbp; int ebp;
-
-    int r8; int r8d;
-    int r9; int r9d;
-    int r10; int r10d;
-    int r11; int r11d;
-    int r12; int r12d;
-    int r13; int r13d;
-    int r14; int r14d;
-    int r15; int r15d;
-} registers;
+enum { A_ADD=0, A_SUB=1, A_AND=2, A_XOR=3 };
 
 typedef struct {
-	int SF; //negative < 0, signed 
-	int ZF; //zero == 0
-	int OF; //overflow > 0, signed
-} flags;
+    uint8_t *mem;
+    uint64_t pc;
+    uint64_t reg[15];
+    bool ZF, SF, OF;
+    stat_t status;
+    bool fatal;
+} cpu_t;
 
-
-void set_reg2(registers reg, int pc, int value){
-
-	char rb = mem[pc];
-	pc++; 
-
-	switch (rb) {
-		
-			case '0':
-			reg.eax = value; 
-			break;
-
-			case '1':
-			reg.ecx = value; 
-			break;
-
-			case '2':
-			reg.edx = value; 
-			break;
-
-			case '3':
-			reg.ebx = value; 
-			break;
-
-			case '4':
-			reg.esp = value; 
-			break;
-
-			case '5':
-			reg.ebp = value; 
-			break;
-
-			case '6':
-			reg.esi = value; 
-			break;
-
-			case '7':
-			reg.edi = value; 
-			break;
-
-			default: 
-			status = 3; 
-			break;
-	}	
-
+static const char *stat_name(stat_t s) {
+    switch (s) {
+        case STAT_AOK: return "AOK";
+        case STAT_HLT: return "HLT";
+        case STAT_ADR: return "ADR";
+        case STAT_INS: return "INS";
+        default:        return "UNK";
+    }
 }
 
-
-void get_value(char*value,int pc){
-
-  int i;
-  pc+=6;
-  for(i=0;i<8;i++){
-    
-    value[i]=mem[pc];
-    i++;
-    value[i] = mem[pc+1];
-    pc-=2;
-  }
+static bool check_addr(uint64_t a, size_t len) {
+    return a + len <= MEM_SIZE;
 }
 
-void get_mem_value(char*value, int addr, int pc) {
-	int i; 
-	pc+=6;
-	for(i = 0; i < 8; i++) {
-		value[i] = mem[pc];
-		i++;
-		value[i] = mem[pc + 1];
-		pc-=2; 
-	}
+static uint8_t get_byte(cpu_t *cpu, uint64_t a, bool *ok) {
+    if (!check_addr(a,1)) { if(ok) *ok = false; return 0; }
+    if(ok) *ok = true;
+    return cpu->mem[a];
 }
 
-int get_reg_value(int pc, registers reg) {
-
-	int tmp; 
-
-	switch(mem[pc]) {
-		case '0':
-		tmp = reg.eax;
-		break;
-
-		case '1':
-		tmp = reg.ecx;
-		break;
-
-		case '2':
-		tmp = reg.edx;
-		break;
-
-		case '3':
-		tmp = reg.ebx;
-		break;
-
-		case '4':
-		tmp = reg.esp;
-		break;
-
-		case '5':
-		tmp = reg.ebp;
-		break;
-
-		case '6':
-		tmp = reg.esi;
-		break;
-
-		case '7':
-		tmp = reg.edi;
-		break;
-
-		default:
-		status = 3;
-		break;
-	}
-
-	return tmp; 
+static uint64_t get_long(cpu_t *cpu, uint64_t a, bool *ok) {
+    if (!check_addr(a,8)) { if(ok) *ok = false; return 0; }
+    uint64_t v = 0;
+    for (int i=0;i<8;i++) v |= ((uint64_t)cpu->mem[a+i]) << (8*i);
+    if(ok) *ok = true;
+    return v;
 }
 
-int alo(int pc, registers reg, char ifun, flags flags){
-	int reg1Val, reg2Val; 
-	reg1Val=get_reg_value(pc,reg);
-	pc++;
-	reg2Val=get_reg_value(pc, reg);
-	pc++; 
-	switch(ifun){
-		case 0:
-		reg2Val+=reg1Val;
-		break;
-
-		case 1:
-		reg2Val-=reg1Val;
-		break;
-		
-		case 2:
-		reg2Val=reg1Val & reg2Val;
-		break;
-		
-		case 3:
-		reg2Val=reg1Val ^ reg2Val;
-		break;
-
-		default:
-		status=3;
-		break;		
-	}
-	return pc; 
+static bool set_byte(cpu_t *cpu, uint64_t a, uint8_t v) {
+    if (!check_addr(a,1)) return false;
+    cpu->mem[a] = v;
+    return true;
 }
 
-//move operations 
-
-int rrmovl(registers reg, int pc) {
-
-	int r1val = get_reg_value(pc, reg);
-	pc++;
-	
-	set_reg2(reg, pc, r1val);
-
-	return pc; 
-
+static bool set_long(cpu_t *cpu, uint64_t a, uint64_t v) {
+    if (!check_addr(a,8)) return false;
+    for (int i=0;i<8;i++) cpu->mem[a+i] = (v >> (8*i)) & 0xFF;
+    return true;
 }
 
-int cmov(registers reg, int pc, flags flags){
-		char r2 = mem[pc];
-
-		switch(r2){
-
-			case '0':
-			rrmovl(reg, pc);
-			break;
-
-			case '1':
-			if(flags.ZF || flags.SF){
-				rrmovl(reg, pc);
-			}
-			break;
-
-			case '2':
-			if(flags.SF){
-				rrmovl(reg, pc);
-			}
-			break;
-
-			case '3':
-			if(flags.ZF) {
-				rrmovl(reg, pc);
-			}
-			break;
-
-			case '4':
-			if(!flags.ZF){
-				rrmovl(reg, pc);
-			}
-			break;
-
-			case'5':
-			if(!flags.ZF && !flags.SF){
-				rrmovl(reg, pc);
-			}
-			break;	
-
-			default:
-			status = 3; 
-			break;
-
-		}
-		pc++; 
-		return pc; 
-	}
-
-
-
-int irmovl(registers reg, int pc) {
-
-  pc++;
-  
-  char value[8]; //its 8 bits
-
-  get_value(value,pc);
-  set_reg2(reg, pc, (int)strtol(value,NULL,16));
-  pc++;
-
-  return pc+8;
-
+static bool cond(cpu_t *c, uint8_t f) {
+    switch(f){
+        case 0: return true;
+        case 1: return (c->SF ^ c->OF) || c->ZF;
+        case 2: return (c->SF ^ c->OF);
+        case 3: return c->ZF;
+        case 4: return !c->ZF;
+        case 5: return !(c->SF ^ c->OF);
+        case 6: return !(c->SF ^ c->OF) && !c->ZF;
+    }
+    return false;
 }
 
-int rmmovl(registers reg, int pc){
-	
-	int val1, val2; 
-
-	val1 = get_reg_value(pc, reg);
-	pc++;
-	val2 = get_reg_value(pc, reg);
-	pc++; 
-
-	char value[8];
-	get_value(value, pc);
-
-	int d = (int)strtol(value,NULL,16);
-	int addr; 
-
-	addr = val2 + d;
-
-	mem[addr] = val1;  
-
-	return pc; 
-
+static uint64_t alu(cpu_t *c, uint8_t f, uint64_t a, uint64_t b) {
+    long long A=a, B=b, R=0;
+    bool of=false;
+    switch(f){
+        case A_ADD: R = B + A;
+            of = ((A<0&&B<0&&R>=0)||(A>=0&&B>=0&&R<0)); break;
+        case A_SUB: R = B - A;
+            of = ((B<0&&A>=0&&R>=0)||(B>=0&&A<0&&R<0)); break;
+        case A_AND: R = B & A; break;
+        case A_XOR: R = B ^ A; break;
+    }
+    uint64_t res = (uint64_t)R;
+    c->ZF = (res == 0);
+    c->SF = ((long long)res < 0);
+    c->OF = of;
+    return res;
 }
 
-int mrmovl(registers reg, int pc){
-	//memory to registers
+/*
+ * ========= instruction fetch helpers =========
+ */
 
-	char value[8];
-	get_value(value, pc);
-
-	int val1, val2; 
-
-	val1 = get_reg_value(pc, reg);  //ra 
-	pc++;
-	val2 = get_reg_value(pc, reg); //rb 
-
-
-	int addr;
-
-	int d = (int)strtol(value,NULL,16); 
-
-	addr = val1 + d; 
-	int a = mem[addr];
-	set_reg2(reg, pc, a);
-
-	return pc; 
-
+static bool fetch_byte(cpu_t *c, uint8_t *r) {
+    bool ok;
+    *r = get_byte(c, c->pc, &ok);
+    if (!ok) { c->status = STAT_ADR; return false; }
+    c->pc += 1;
+    return true;
 }
 
-int push(registers reg, int pc){
-	//decrease esp by 4
-	//store val1 to memory at esp
-
-	reg.esp-=4;
-	int val = get_reg_value(pc, reg);
-	mem[reg.esp] = val; 
-	pc+=4; 
-	return pc; 
-
+static bool fetch_reg(cpu_t *c, uint8_t *rA, uint8_t *rB) {
+    uint8_t b;
+    if(!fetch_byte(c,&b)) return false;
+    *rA = (b >> 4) & 0xF;
+    *rB = b & 0xF;
+    return true;
 }
 
-
-int pop(registers reg, int pc) {
-	//read word from memory at esp
-	//save in val 1
-	//increase esp by 4
-	
-	int val1; 
-	val1 = mem[reg.esp];
-	set_reg2(reg, pc, val1);
-	reg.esp += 4; 
-	pc+=4; 
-	return pc; 
-
+static bool fetch_long(cpu_t *c, uint64_t *v) {
+    bool ok;
+    *v = get_long(c, c->pc, &ok);
+    if (!ok) { c->status = STAT_ADR; return false; }
+    c->pc += 8;
+    return true;
 }
 
+/*
+ * ========= EXECUTE ONE INSTRUCTION =========
+ */
 
-//jump instructions 
+static void step(cpu_t *c){
+    if (c->status != STAT_AOK) return;
 
-int jmp(registers reg, int pc, flags flags) {
+    bool ok;
+    uint8_t b0 = get_byte(c, c->pc, &ok);
+    if(!ok){ c->status = STAT_ADR; return; }
 
-	int temp;
-  char r2 = mem[pc];
-  pc++;
-  char value[8]; 
+    uint8_t icode = (b0 >> 4) & 0xF;
+    uint8_t ifun  = (b0 & 0xF);
+    if (icode == I_HALT) {
+    c->status = STAT_HLT;
+    return;
+    }
+    c->pc += 1;
 
-  switch (r2) {
+    switch(icode){
+        case I_NOP:
+            return;
 
-      case '0': //jmp
-        get_value(value,pc);
-        temp = (int)strtol(value,NULL,16); 
-        pc = temp;
-      break;
-
-      case '1': //jle
-        get_value(value,pc);
-        temp = (int)strtol(value,NULL,16); 
-        if ((flags.SF ^ flags.OF) || flags.ZF) {
-          pc = temp;
-        } else {
-          pc += 5;
+        case I_RRMOVQ: {
+            uint8_t rA,rB;
+            if(!fetch_reg(c,&rA,&rB)) return;
+            if(rA<15 && rB<15 && cond(c,ifun)) c->reg[rB] = c->reg[rA];
+            return;
         }
-      break;
 
-      case '2': //jl
-        get_value(value,pc);
-        temp = (int)strtol(value,NULL,16); 
-        if (flags.SF ^ flags.OF) {
-          pc = temp;
-        } else {
-          pc += 5;
+        case I_IRMOVQ: {
+            uint8_t rA,rB; uint64_t V;
+            if(!fetch_reg(c,&rA,&rB)) return;
+            if(!fetch_long(c,&V)) return;
+            if(rB<15) c->reg[rB] = V;
+            return;
         }
-      break;
 
-      case '3': //je
-        get_value(value,pc);
-        temp = (int)strtol(value,NULL,16); 
-        if (flags.ZF) {
-          pc += 5;
-        } else {
-          pc += 5;
+        case I_RMMOVQ: {
+            uint8_t rA,rB; uint64_t D;
+            if(!fetch_reg(c,&rA,&rB)) return;
+            if(!fetch_long(c,&D)) return;
+            uint64_t addr = c->reg[rB] + D;
+            if(!set_long(c,addr,c->reg[rA])) { c->status = STAT_ADR; return; }
+            return;
         }
-      break;
 
-      case '4': //jne
-        get_value(value,pc);
-        temp = (int)strtol(value,NULL,16); 
-        if (!flags.ZF) {
-          pc = temp;
-        } else {
-          pc += 5;
+        case I_MRMOVQ: {
+            uint8_t rA,rB; uint64_t D;
+            if(!fetch_reg(c,&rA,&rB)) return;
+            if(!fetch_long(c,&D)) return;
+            uint64_t addr = c->reg[rB] + D;
+            uint64_t val = get_long(c,addr,&ok);
+            if(!ok){ c->status = STAT_ADR; return; }
+            if(rA<15) c->reg[rA] = val;
+            return;
         }
-      break;
 
-      case '5': //jge
-       	get_value(value,pc);
-       	temp = (int)strtol(value,NULL,16); 
-        if (!(flags.SF ^ flags.OF)) {
-          pc = temp;
-        } else {
-          pc += 5;
+        case I_OPQ: {
+            uint8_t rA,rB;
+            if(!fetch_reg(c,&rA,&rB)) return;
+            if(rA<15 && rB<15){
+                uint64_t res = alu(c, ifun, c->reg[rA], c->reg[rB]);
+                c->reg[rB] = res;
+            }
+            return;
         }
-      break;
 
-      case '6': //jg
-        get_value(value,pc);
-        temp = (int)strtol(value,NULL,16); 
-        if (!(flags.SF ^ flags.OF) & !flags.ZF) {
-          pc = temp;
-        } else {
-          pc += 5;
+        case I_JXX: {
+            uint64_t dest;
+            if(!fetch_long(c,&dest)) return;
+            if(cond(c, ifun)) c->pc = dest;
+            return;
         }
-      break;
 
-      default:
-      status = 3;
-      break;
+        case I_CALL: {
+            uint64_t dest;
+            if(!fetch_long(c,&dest)) return;
+            c->reg[RSP] -= 8;
+            if(!set_long(c, c->reg[RSP], c->pc)){ c->status = STAT_ADR; return; }
+            c->pc = dest;
+            return;
+        }
 
+        case I_RET: {
+            bool ok2;
+            uint64_t addr = get_long(c, c->reg[RSP], &ok2);
+            if(!ok2){ c->status = STAT_ADR; return; }
+            c->reg[RSP] += 8;
+            c->pc = addr;
+            return;
+        }
+
+        case I_PUSHQ: {
+            uint8_t rA,rB;
+            if(!fetch_reg(c,&rA,&rB)) return;
+            c->reg[RSP] -= 8;
+            if(!set_long(c, c->reg[RSP], c->reg[rA])){ c->status = STAT_ADR; return; }
+            return;
+        }
+
+        case I_POPQ: {
+            uint8_t rA,rB; bool ok2;
+            if(!fetch_reg(c,&rA,&rB)) return;
+            uint64_t v = get_long(c, c->reg[RSP], &ok2);
+            if(!ok2){ c->status = STAT_ADR; return; }
+            if(rA<15) c->reg[rA] = v;
+            if(rA != 4) c->reg[RSP] += 8;
+            return;
+        }
+
+        default:
+            c->status = STAT_INS;
+            return;
+    }
+}
+
+/*
+ * ========= JSON Output =========
+ */
+
+static void print_json(cpu_t *c) {
+
+    printf("\n    {\n");
+    printf("        \"CC\": {\n            \"OF\": %d,\n            \"SF\": %d,\n            \"ZF\": %d\n        },\n",
+           c->OF?1:0, c->SF?1:0, c->ZF?1:0);
+    printf("        \"MEM\": {\n");
+
+    bool first = true;
+    for(uint64_t addr=0; addr < MEM_SIZE; addr += 8) {
+        bool ok;
+        uint64_t val = get_long(c, addr, &ok);
+        if(!ok) continue;
+        if (val != 0) {
+            if (!first) printf(",\n");
+            int64_t signed_val = (int64_t)val;
+            printf("        \"%" PRIu64 "\": %" PRId64, addr, signed_val);
+            first = false;
+        }
+    }
+    printf("\n        },\n");
+    printf("        \"PC\": %" PRIu64 ",\n", c->pc);
+    printf("        \"REG\": {\n");
+    const char *names[] = { "r10","r11","r12","r13","r14","r8","r9","rax","rbp","rbx","rcx","rdi","rdx","rsi","rsp" };
+    int idxs[] = { R10, R11, R12, R13, R14, R8, R9, RAX, RBP, RBX, RCX, RDI, RDX, RSI, RSP };
+    for(int i=0;i<15;i++){
+        printf("            \"%s\": %" PRId64, names[i], (int64_t)c->reg[idxs[i]]);
+        if (i < 14) printf(",");
+        printf("\n");
+    }
+    printf("        },\n");
+    printf("        \"STAT\": %d\n", (int)c->status);
+    printf("    }");
+    if(c->status == STAT_AOK) printf(",");
+}
+
+/*
+ * ========= Load .yo File =========
+ */
+
+static int hexval(char c){
+    if(c>='0'&&c<='9')return c-'0';
+    if(c>='a'&&c<='f')return c-'a'+10;
+    if(c>='A'&&c<='F')return c-'A'+10;
+    return -1;
+}
+
+static int parse_hex_bytes(const char *s, uint8_t *out, size_t maxlen) {
+    size_t len = 0;
+    while (*s) {
+        while (*s && isspace((unsigned char)*s)) s++;
+        if (!*s) break;
+        int hi = hexval(*s++);
+        if (hi < 0) break;
+        while (*s && isspace((unsigned char)*s)) s++;
+        if (!*s) return -1; /* odd nibble */
+        int lo = hexval(*s++);
+        if (lo < 0) break;
+        if (len >= maxlen) return -1; /* overflow */
+        out[len++] = (uint8_t)((hi << 4) | lo);
+    }
+    return (int)len;
+}
+static bool load_yo(cpu_t *c) {
+    char line[1024];
+    bool any = false;
+    while (fgets(line, sizeof(line), stdin)) {
+        char *s = line;
+        while (*s && isspace((unsigned char)*s)) s++;
+        if (*s == '\0' || *s == '#') continue;
+        if (strncmp(s, "0x", 2) != 0) continue;
+        /* read address (hex) */
+        char *colon = strchr(s, ':');
+        if (!colon) continue;
+        /* parse address */
+        uint64_t addr = 0;
+        /* parse hex after 0x up to ':' */
+        char addrbuf[64] = {0};
+        size_t ai = 0;
+        char *p = s + 2;
+        while (p < colon && ai + 1 < sizeof(addrbuf)) {
+            if (isxdigit((unsigned char)*p)) addrbuf[ai++] = *p;
+            p++;
+        }
+        addrbuf[ai] = '\0';
+        if (ai == 0) continue;
+        errno = 0;
+        char *endptr = NULL;
+        addr = (uint64_t) strtoull(addrbuf, &endptr, 16);
+        if (errno != 0 || endptr == addrbuf) continue;
+        /* the bytes area may contain spaces or other separators; parse all hex nibbles after ':' */
+        const char *bytes_area = colon + 1;
+        uint8_t tmp[1024];
+        int nb = parse_hex_bytes(bytes_area, tmp, sizeof(tmp));
+        if (nb < 0) {
+            /* odd nibble or overflow; skip this line */
+            continue;
+        }
+        /* write bytes into memory at addr */
+        for (int i = 0; i < nb; ++i) {
+            if (!set_byte(c, addr + (uint64_t)i, tmp[i])) {
+                /* address out of range -> fatal */
+                c->fatal = true;
+                c->status = STAT_ADR;
+                return false;
+            }
+            any = true;
+        }
+    }
+    return any;
+}
+
+/*
+ * ========= CPU Setup =========
+ */
+
+static cpu_t *cpu_new() {
+    cpu_t *c = calloc(1, sizeof(cpu_t));
+    c->mem = calloc(1, MEM_SIZE);
+    c->pc = 0;
+    c->status = STAT_AOK;
+    c->SF = c->OF = 0;
+    c->ZF = 1;
+    for(int i=0;i<15;i++) {
+        c->reg[i] = 0;
+    }
+    c->reg[RSP] = 0; 
+    return c;
+}
+
+static void cpu_free(cpu_t *c){
+    if (!c) return;
+    if (c->mem) free(c->mem);
+    free(c);
+}
+
+/*
+ * ========= main =========
+ */
+
+int main() {
+
+    cpu_t *cpu = cpu_new();
+    if(!load_yo(cpu)){
+        printf("[]\n");
+        return 1;
     }
 
-    return pc;
+    uint64_t steps = 0;
+    printf("[");
+    do{
+        step(cpu);
+        steps++;
+        print_json(cpu);
 
-}
-
-//subroutine call and return 
-
-int ret (registers reg, int pc) {
-
-	pc = mem[reg.esp];
-	pc += 4; 
-	return pc; 
-}
-
-int call (registers reg, int pc) {
-
-	char value[8];
-	get_value(value, pc);
-	int addr = (int)strtol(value,NULL,16); 
-	reg.esp -= 4; 
-	mem[reg.esp] = pc;
-	pc = addr;  
-	return pc; 
-
-}
-
-int nop(int pc) {
-	//pc+=2; 
-	return pc; 
-}
-
-//miscellaneous instructions
-
-int main (int argc, char *argv[]) {
-
-	int i, j, k; 
-	registers reg; 
-	flags flags;
-	char icode, ifun;
-	int val1, val2; 
-	int steps, pc;
-
-	//read in the file 
-	FILE *file;
-    file = fopen(argv[1],"r");
-    fgets(buff,BUFF_SIZE,file); 
-
-    i = 0; 
-    while(buff[i] != '\0'){
-    	mem[i] = buff[i];
-    	i++;
-    }
-
-	i = 0; 
-	pc = 0; 
-	reg.eax = reg.ecx = reg.edx = reg.ebx = reg.esi = reg.edi = 0; 
-	flags.SF = flags.ZF = flags.OF = 0; 
-	steps = 0; 
-	status = 1; 
-
-	reg.esp = reg.ebp = size - 4; //these are addresses
-
-	while((status == 1) && (buff[i] != '\0')) {
-
-		steps++;
-		icode = buff[pc];
-		pc++; 
-		ifun = buff[pc];
-		pc++; 
-			 
-		switch (icode) {
-	
-			case '0':
-			//halt
-			status = 2; 
-			break;
-
-			case '1':
-			//no op- does nothing 
- 			pc = nop(pc);
-			break;
-
-			case '2':
-			//rrmove operation
-			pc = cmov(reg, pc, flags);
-			break;
-
-			case '3':
-			//irmove operation
-			pc = irmovl(reg, pc);
-			break; 
-
-			case '4':
-			//rmmove operation
-			pc = rmmovl(reg, pc);
-			break;
-
-			case '5':
-			//mrmove operation
-			pc = mrmovl(reg, pc);
-			break;
-
-			case '6':
-			//arithmetic or logic
-			pc = alo(pc, reg, ifun, flags);
-			break;
-
-			case '7':
-			//jump operations 
-			pc = jmp(reg, pc, flags);
-			break;
-
-			case '8':
-			//call
-			pc = call(reg, pc);
-			break;
-
-			case '9':
-			//ret 
-			pc = ret(reg, pc); 
-			break;
-
-			case 'a':
-			//push
-			pc = push(reg, pc);
-			break;
-
-			case 'b':
-			//pop
-			pc = pop(reg, pc);
-			break;
-
-			default: 
-			status = 4; 
-			break;
-		}
-
-	}
-
-	//now start getting ready to print things 
-	char stat[5]; 
-
-	switch(status) {
-
-		case 1:
-		strcpy(stat, "AOK");
-		break;
-
-		case 2:
-		strcpy(stat, "HLT");
-		break;
-
-		case 3:
-		strcpy(stat, "ADR");
-		break;
-
-		case 4:
-		strcpy(stat, "INS");
-		break;
-
-		default:
-		break;
-
-	}
-
-	printf("Steps: %d\n", steps);
-	printf("PC: %d\n", pc);
-	printf("Status: %s\n", stat);
-	printf("CZ: %d\n", flags.ZF);
-	printf("CS: %d\n", flags.SF);
-	printf("CO: %d\n", flags.OF);
-	printf("%ceax: %d\n", 37, reg.eax);
-	printf("%cecx: %d\n", 37, reg.ecx);
-	printf("%cedx: %d\n", 37, reg.edx);
-	printf("%cebx: %d\n", 37, reg.ebx);
-	printf("%cesp: %d\n", 37, reg.esp);
-	printf("%cebp: %d\n", 37, reg.ebp);
-	printf("%cesi: %d\n", 37, reg.esi);
-	printf("%cedi: %d\n", 37, reg.edi);
-
+        if (steps > 10000000ULL) {
+            fprintf(stderr, "Too many steps, abort.\n");
+            break;
+        }
+    }while (cpu->status == STAT_AOK);
+    printf("\n]\n");
+    cpu_free(cpu);
+    return 0;
 }
