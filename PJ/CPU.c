@@ -41,7 +41,9 @@ static const char *stat_name(stat_t s) {
 }
 
 static bool check_addr(uint64_t a, size_t len) {
-    return a + len <= MEM_SIZE;
+    if (len == 0) return true;
+    if (a >= MEM_SIZE) return false;
+    return (a + len - 1) < MEM_SIZE;
 }
 
 static uint8_t get_byte(cpu_t *cpu, uint64_t a, bool *ok) {
@@ -135,7 +137,7 @@ static bool fetch_long(cpu_t *c, uint64_t *v) {
 
 static void step(cpu_t *c){
     if (c->status != STAT_AOK) return;
-
+    uint64_t current_pc = c->pc;
     bool ok;
     uint8_t b0 = get_byte(c, c->pc, &ok);
     if(!ok){ c->status = STAT_ADR; return; }
@@ -146,6 +148,7 @@ static void step(cpu_t *c){
     c->status = STAT_HLT;
     return;
     }
+    if (c->status != STAT_AOK) return;
     c->pc += 1;
 
     switch(icode){
@@ -225,8 +228,16 @@ static void step(cpu_t *c){
         case I_PUSHQ: {
             uint8_t rA,rB;
             if(!fetch_reg(c,&rA,&rB)) return;
-            c->reg[RSP] -= 8;
-            if(!set_long(c, c->reg[RSP], c->reg[rA])){ c->status = STAT_ADR; return; }
+            uint64_t current_sp = c->reg[RSP];
+            uint64_t new_sp = current_sp - 8;
+            uint64_t value_to_push;
+            if (rA == 4) {
+                value_to_push = current_sp; 
+            } else {
+                value_to_push = c->reg[rA];
+            }
+            c->reg[RSP] = new_sp;
+            if(!set_long(c, new_sp, value_to_push)) { c->status = STAT_ADR; c->pc=current_pc; return;}
             return;
         }
 
@@ -367,7 +378,9 @@ static bool load_yo(cpu_t *c) {
 
 static cpu_t *cpu_new() {
     cpu_t *c = calloc(1, sizeof(cpu_t));
+    if (!c) return NULL;
     c->mem = calloc(1, MEM_SIZE);
+    if (!c->mem) { free(c); return NULL; }
     c->pc = 0;
     c->status = STAT_AOK;
     c->SF = c->OF = 0;
@@ -378,7 +391,7 @@ static cpu_t *cpu_new() {
     c->reg[RSP] = 0; 
     return c;
 }
-
+/*
 static void cpu_free(cpu_t *c){
     if (!c) return;
     if (c->mem) free(c->mem);
@@ -390,7 +403,6 @@ static void cpu_free(cpu_t *c){
  */
 
 int main() {
-
     cpu_t *cpu = cpu_new();
     if(!load_yo(cpu)){
         printf("[]\n");
@@ -410,6 +422,6 @@ int main() {
         }
     }while (cpu->status == STAT_AOK);
     printf("\n]\n");
-    cpu_free(cpu);
+    //cpu_free(cpu);
     return 0;
 }
