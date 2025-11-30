@@ -16,7 +16,7 @@ enum { RAX=0, RCX, RDX, RBX, RSP, RBP, RSI, RDI,
 enum {
     I_HALT=0, I_NOP=1, I_RRMOVQ=2, I_IRMOVQ=3, I_RMMOVQ=4,
     I_MRMOVQ=5, I_OPQ=6, I_JXX=7, I_CALL=8,
-    I_RET=9, I_PUSHQ=0xA, I_POPQ=0xB
+    I_RET=9, I_PUSHQ=0xA, I_POPQ=0xB, I_PRT=0xC
 }; // 11种指令类型
 
 enum { A_ADD=0, A_SUB=1, A_AND=2, A_XOR=3 }; // ALU的4种运算类型
@@ -238,6 +238,7 @@ static void decode_stage(cpu_t *c) {
         case I_JXX:      // 条件跳转
             // 跳转指令不需要寄存器操作数
             break;
+        case I_PRT:
     }
     
     // 设置目标寄存器（写回阶段使用）
@@ -323,6 +324,14 @@ static void execute_stage(cpu_t *c) {
             // 计算新的栈指针：原SP + 8
             c->pipe.valE = c->pipe.valB + 8;
             break;
+        
+        case I_PRT: {
+            if(c->pipe.ifun == 0)
+                printf("%" PRId64 "\n", (int64_t)c->pipe.rA);
+            if(c->pipe.ifun == 1)
+                printf("%" PRId64 "\n", (int64_t)c->pipe.valM);
+            return;
+        }
     }
 }
 
