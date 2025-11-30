@@ -16,7 +16,7 @@ enum { RAX=0, RCX, RDX, RBX, RSP, RBP, RSI, RDI,
 enum {
     I_HALT=0, I_NOP=1, I_RRMOVQ=2, I_IRMOVQ=3, I_RMMOVQ=4,
     I_MRMOVQ=5, I_OPQ=6, I_JXX=7, I_CALL=8,
-    I_RET=9, I_PUSHQ=0xA, I_POPQ=0xB, I_PRT=0xC, I_SET=0xD
+    I_RET=9, I_PUSHQ=0xA, I_POPQ=0xB
 };
 
 enum { A_ADD=0, A_SUB=1, A_AND=2, A_XOR=3 };
@@ -251,63 +251,6 @@ static void step(cpu_t *c){
             return;
         }
 
-        case I_PRT: {
-            if(ifun == 0){
-            uint8_t rA,rB;
-            if(!fetch_reg(c,&rA,&rB)) return;
-            if(rA<15){
-                printf("%ld\n", (int64_t)c->reg[rA]);
-            }
-            return;
-            }
-            if(ifun == 1){
-                uint64_t addr;
-                if(!fetch_long(c,&addr)) return;
-                bool ok;
-                uint64_t val = get_long(c, addr, &ok);
-                if(!ok){ c->status = STAT_ADR; return; }
-                printf("MEM[%" PRIu64 "] : %ld\n", addr, (int64_t)val);
-                return;
-            }
-        }
-
-        case I_SET: {
-            if(ifun == 0){
-            uint8_t rA,rB;
-            if(!fetch_reg(c,&rA,&rB)) return;
-            if(rA<15){
-                int input;
-                printf("Input an integer in range for int8_t: ");
-                scanf(" %d", &input);
-                if(input > 127 || input < -128){
-                    printf("Input out of range for int8_t.\n");
-                    c->status = STAT_INS;
-                    return;
-                }
-                c->reg[rA] = (uint64_t)(int8_t)input;
-            }
-            return;
-            }
-            if(ifun == 1){
-                uint64_t addr;
-                if(!fetch_long(c,&addr)) return;
-                int input;
-                printf("Input an integer for MEM[%" PRIu64 "]: ", addr);
-                scanf(" %d", &input);
-                if(input > 127 || input < -128){
-                    printf("Input out of range for int8_t.\n");
-                    c->status = STAT_INS;
-                    return;
-                }
-                if(!set_long(c, addr, (uint64_t)(int8_t)input)){
-                    c->status = STAT_ADR;
-                    return;
-                }
-                return;
-            }
-            
-        }
-
         default:
             c->status = STAT_INS;
             return;
@@ -448,7 +391,7 @@ static cpu_t *cpu_new() {
     c->reg[RSP] = 0; 
     return c;
 }
-
+/*
 static void cpu_free(cpu_t *c){
     if (!c) return;
     if (c->mem) free(c->mem);
@@ -459,27 +402,13 @@ static void cpu_free(cpu_t *c){
  * ========= main =========
  */
 
-int main(int argc, char *argv[]) {
+int main() {
     cpu_t *cpu = cpu_new();
-    bool debug_mode = false;
     if(!load_yo(cpu)){
         printf("[]\n");
         return 1;
     }
-    if (argc > 1 && strcmp(argv[1], "--debug") == 0) {
-        debug_mode = true;
-    }
-    if(debug_mode){
-        while (cpu->status == STAT_AOK) {
-            char input[10];
-            printf("Press Enter to step, or type 'q' to quit debug: ");
-            fgets(input, sizeof(input), stdin);
-            if (input[0] == 'q') break;  
-            step(cpu);  
-            print_json(cpu);
-            }   
-    }
-    else if (!debug_mode){
+
     uint64_t steps = 0;
     printf("[");
     do{
@@ -493,7 +422,6 @@ int main(int argc, char *argv[]) {
         }
     }while (cpu->status == STAT_AOK);
     printf("\n]\n");
-    }
-    cpu_free(cpu);
+    //cpu_free(cpu);
     return 0;
 }
