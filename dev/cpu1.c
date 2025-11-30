@@ -21,6 +21,17 @@ enum {
 
 enum { A_ADD=0, A_SUB=1, A_AND=2, A_XOR=3 }; // ALU的4种运算类型
 
+// 细分的条件移动和跳转指令类型
+typedef enum {
+    C_ALWAYS=0,   // 无条件 (cmovq / jmp)
+    C_LE=1,       // 小于等于 (cmovle / jle)
+    C_L=2,        // 小于 (cmovl / jl)  
+    C_E=3,        // 等于 (cmove / je)
+    C_NE=4,       // 不等于 (cmovne / jne)
+    C_GE=5,       // 大于等于 (cmovge / jge)
+    C_G=6         // 大于 (cmovg / jg)
+} condition_t;
+
 /* ==================== CPU 状态结构体 ==================== */
 typedef struct {
     uint8_t *mem;          // 1MB内存空间
@@ -44,6 +55,7 @@ typedef struct {
         uint64_t valM;     // 从内存读取的值
         uint64_t dstE;     // 目标寄存器E（用于写入ALU结果）
         uint64_t dstM;     // 目标寄存器M（用于写入内存数据）
+        const char* instr_name; // 当前执行的指令名称（用于调试）
     } pipe;
 } cpu_t;
 
@@ -96,18 +108,51 @@ static bool set_long(cpu_t *cpu, uint64_t a, uint64_t v) {
 
 /* ==================== ALU 和条件码处理 ==================== */
 
-// 根据条件码判断跳转条件是否满足
-static bool cond(cpu_t *c, uint8_t f) {
-    switch(f){
-        case 0: return true;                      // 无条件跳转
-        case 1: return (c->SF ^ c->OF) || c->ZF;  // 小于等于跳转
-        case 2: return (c->SF ^ c->OF);           // 小于跳转
-        case 3: return c->ZF;                     // 等于跳转
-        case 4: return !c->ZF;                    // 不等于跳转
-        case 5: return !(c->SF ^ c->OF);          // 大于等于跳转
-        case 6: return !(c->SF ^ c->OF) && !c->ZF;// 大于跳转
+// 根据条件码和功能码判断条件是否满足，同时检查功能码有效性
+static bool cond(cpu_t *c, uint8_t f, const char** cond_name) {
+    // 定义条件名称映射
+    static const char* condition_names[] = {
+        "always", "le", "l", "e", "ne", "ge", "g"
+    };
+    
+    // 检查功能码有效性
+    if (f > 6) {
+        if (cond_name) *cond_name = "invalid";
+        c->status = STAT_INS;  // 无效功能码，指令错误
+        return false;
     }
-    return false;
+    
+    // 设置条件名称
+    if (cond_name) *cond_name = condition_names[f];
+    
+    // 根据功能码判断条件
+    switch(f){
+        case C_ALWAYS: return true;                      // 无条件
+        case C_LE: return (c->SF ^ c->OF) || c->ZF;      // 小于等于：SF≠OF 或 ZF=1
+        case C_L: return (c->SF ^ c->OF);                // 小于：SF≠OF
+        case C_E: return c->ZF;                          // 等于：ZF=1
+        case C_NE: return !c->ZF;                        // 不等于：ZF=0
+        case C_GE: return !(c->SF ^ c->OF);              // 大于等于：SF=OF
+        case C_G: return !(c->SF ^ c->OF) && !c->ZF;     // 大于：SF=OF 且 ZF=0
+    }
+    
+    return false;  // 不应该执行到这里
+}
+
+// 获取条件移动指令的名称
+static const char* get_cmov_name(uint8_t ifun) {
+    static const char* cmov_names[] = {
+        "cmovq", "cmovle", "cmovl", "cmove", "cmovne", "cmovge", "cmovg"
+    };
+    return (ifun <= 6) ? cmov_names[ifun] : "cmov_invalid";
+}
+
+// 获取跳转指令的名称  
+static const char* get_jump_name(uint8_t ifun) {
+    static const char* jump_names[] = {
+        "jmp", "jle", "jl", "je", "jne", "jge", "jg"
+    };
+    return (ifun <= 6) ? jump_names[ifun] : "j_invalid";
 }
 
 // 算术逻辑单元：执行运算并设置条件码
@@ -154,9 +199,11 @@ static bool fetch_stage(cpu_t *c) {
     c->pipe.icode = (b0 >> 4) & 0xF;
     c->pipe.ifun = b0 & 0xF;
     c->pipe.valP = c->pc + 1;  // 默认下一条指令地址
+    c->pipe.instr_name = "unknown"; // 默认指令名称
     
     // HALT指令特殊处理：直接停机
     if (c->pipe.icode == I_HALT) {
+        c->pipe.instr_name = "halt";
         c->status = STAT_HLT;
         return false;
     }
@@ -197,6 +244,21 @@ static bool fetch_stage(cpu_t *c) {
         c->pipe.valC = 0;
     }
     
+    // 设置指令名称（用于调试和错误报告）
+    switch (c->pipe.icode) {
+        case I_NOP: c->pipe.instr_name = "nop"; break;
+        case I_RRMOVQ: c->pipe.instr_name = get_cmov_name(c->pipe.ifun); break;
+        case I_IRMOVQ: c->pipe.instr_name = "irmovq"; break;
+        case I_RMMOVQ: c->pipe.instr_name = "rmmovq"; break;
+        case I_MRMOVQ: c->pipe.instr_name = "mrmovq"; break;
+        case I_OPQ: c->pipe.instr_name = "opq"; break;
+        case I_JXX: c->pipe.instr_name = get_jump_name(c->pipe.ifun); break;
+        case I_CALL: c->pipe.instr_name = "call"; break;
+        case I_RET: c->pipe.instr_name = "ret"; break;
+        case I_PUSHQ: c->pipe.instr_name = "pushq"; break;
+        case I_POPQ: c->pipe.instr_name = "popq"; break;
+    }
+    
     return true;
 }
 
@@ -212,7 +274,7 @@ static void decode_stage(cpu_t *c) {
     
     // 根据指令类型读取寄存器操作数
     switch (c->pipe.icode) {
-        case I_RRMOVQ:   // 寄存器移动
+        case I_RRMOVQ:   // 条件寄存器移动
         case I_RMMOVQ:   // 寄存器到内存
         case I_OPQ:      // 算术运算
         case I_PUSHQ:    // 压栈
@@ -243,8 +305,8 @@ static void decode_stage(cpu_t *c) {
     // 设置目标寄存器（写回阶段使用）
     switch (c->pipe.icode) {
         case I_RRMOVQ:   // 条件寄存器移动
-            if (cond(c, c->pipe.ifun) && c->pipe.rB < 15) 
-                c->pipe.dstE = c->pipe.rB;
+            // 注意：这里不检查条件，条件检查在执行阶段后决定是否写回
+            if (c->pipe.rB < 15) c->pipe.dstE = c->pipe.rB;
             break;
         case I_IRMOVQ:   // 立即数加载
             if (c->pipe.rB < 15) c->pipe.dstE = c->pipe.rB;
@@ -275,53 +337,49 @@ static void execute_stage(cpu_t *c) {
     
     switch (c->pipe.icode) {
         case I_RRMOVQ:   // 寄存器移动
-            // 直接传递源寄存器值
-            c->pipe.valE = c->pipe.valA;
+            c->pipe.valE = c->pipe.valA;  // 直接传递源寄存器值
             break;
             
         case I_IRMOVQ:   // 立即数加载
-            // 直接使用立即数
-            c->pipe.valE = c->pipe.valC;
+            c->pipe.valE = c->pipe.valC;  // 直接使用立即数
             break;
             
-        case I_RMMOVQ:   // 存储指令：寄存器 -> 内存
-            // 计算目标内存地址：基址寄存器 + 偏移量
+        case I_RMMOVQ:   // 存储指令
+            // 计算目标内存地址：valB(基址) + valC(偏移)
             c->pipe.valE = c->pipe.valB + c->pipe.valC;
             break;
             
-        case I_MRMOVQ:   // 加载指令：内存 -> 寄存器  
-            // 计算源内存地址：基址寄存器 + 偏移量
+        case I_MRMOVQ:   // 加载指令  
+            // 计算源内存地址：valB(基址) + valC(偏移)
             c->pipe.valE = c->pipe.valB + c->pipe.valC;
             break;
             
         case I_OPQ:      // 算术运算
-            // 调用ALU执行运算
             c->pipe.valE = alu(c, c->pipe.ifun, c->pipe.valA, c->pipe.valB);
             break;
             
         case I_JXX:      // 跳转指令
-            // 跳转目标就是立即数
-            c->pipe.valE = c->pipe.valC;
+            c->pipe.valE = c->pipe.valC;  // 跳转目标地址
             break;
             
         case I_CALL:     // 函数调用
-            // 计算新的栈指针：原SP - 8（压入返回地址）
-            c->pipe.valE = c->pipe.valB - 8;
+            c->pipe.valE = c->pipe.valB - 8;  // 新栈指针：原SP-8
             break;
             
         case I_RET:      // 函数返回
-            // 恢复栈指针：原SP + 8（弹出返回地址）
-            c->pipe.valE = c->pipe.valB + 8;
+            c->pipe.valE = c->pipe.valB + 8;  // 新栈指针：原SP+8
             break;
             
         case I_PUSHQ:    // 压栈
-            // 计算新的栈指针：原SP - 8
-            c->pipe.valE = c->pipe.valB - 8;
+            c->pipe.valE = c->pipe.valB - 8;  // 新栈指针：原SP-8
             break;
             
         case I_POPQ:     // 出栈
-            // 计算新的栈指针：原SP + 8
-            c->pipe.valE = c->pipe.valB + 8;
+            c->pipe.valE = c->pipe.valB + 8;  // 新栈指针：原SP+8
+            break;
+            
+        default:
+            // 对于不支持的指令，valE保持为0
             break;
     }
 }
@@ -335,8 +393,7 @@ static bool memory_stage(cpu_t *c) {
     
     switch (c->pipe.icode) {
         case I_RMMOVQ:   // 寄存器到内存
-        case I_PUSHQ:    // 压栈
-            // 将数据写入内存
+            // 将寄存器值存储到计算出的内存地址
             if (!set_long(c, c->pipe.valE, c->pipe.valA)) {
                 c->status = STAT_ADR;
                 return false;
@@ -344,9 +401,21 @@ static bool memory_stage(cpu_t *c) {
             break;
             
         case I_MRMOVQ:   // 内存到寄存器
-            // 从内存读取数据
+            // 从计算出的内存地址加载值
             c->pipe.valM = get_long(c, c->pipe.valE, &ok);
             if (!ok) {
+                c->status = STAT_ADR;
+                return false;
+            }
+            break;
+            
+        case I_PUSHQ:    // 压栈
+            // 特殊处理：PUSHQ %rsp 要压入原始SP值
+            uint64_t value_to_push = c->pipe.valA;
+            if (c->pipe.rA == RSP) {
+                value_to_push = c->pipe.valB; // 使用旧的栈指针值
+            }
+            if (!set_long(c, c->pipe.valE, value_to_push)) {
                 c->status = STAT_ADR;
                 return false;
             }
@@ -378,14 +447,23 @@ static bool memory_stage(cpu_t *c) {
 
 // 写回阶段：将结果写入寄存器文件
 static void writeback_stage(cpu_t *c) {
+    // 对于条件移动指令，需要检查条件后再决定是否写回
+    if (c->pipe.icode == I_RRMOVQ) {
+        const char* cond_name;
+        bool condition_met = cond(c, c->pipe.ifun, &cond_name);
+        
+        // 如果条件不满足，取消目标寄存器写入
+        if (!condition_met) {
+            c->pipe.dstE = RNONE;
+        }
+        
+        // 如果条件检查过程中出现错误（如无效功能码），状态已被设置，直接返回
+        if (c->status != STAT_AOK) return;
+    }
+    
     // 写入目标寄存器E（ALU结果或地址计算结果）
     if (c->pipe.dstE != RNONE && c->pipe.dstE < 15) {
-        // 特殊处理：PUSHQ %rsp 指令要压入原始SP值而不是新SP值
-        if (c->pipe.icode == I_PUSHQ && c->pipe.rA == RSP) {
-            c->reg[c->pipe.dstE] = c->pipe.valB; // 使用旧的栈指针值
-        } else {
-            c->reg[c->pipe.dstE] = c->pipe.valE; // 正常写入ALU结果
-        }
+        c->reg[c->pipe.dstE] = c->pipe.valE;
     }
     
     // 写入目标寄存器M（内存读取的数据）
@@ -401,7 +479,13 @@ static void pc_update_stage(cpu_t *c) {
     switch (c->pipe.icode) {
         case I_JXX:      // 条件跳转
             // 根据条件码决定是否跳转
-            if (cond(c, c->pipe.ifun)) {
+            const char* cond_name;
+            bool should_jump = cond(c, c->pipe.ifun, &cond_name);
+            
+            // 如果条件检查过程中出现错误，状态已被设置，使用默认PC
+            if (c->status != STAT_AOK) {
+                c->pc = c->pipe.valP;
+            } else if (should_jump) {
                 c->pc = c->pipe.valE; // 跳转到目标地址
             } else {
                 c->pc = c->pipe.valP; // 顺序执行下一条指令
@@ -448,6 +532,9 @@ static void step(cpu_t *c) {
     
     // 阶段6: 更新PC - 确定下一条指令地址
     pc_update_stage(c);
+    
+    // 调试输出：可以取消注释来查看每条执行的指令
+    // printf("Executed: %s\n", c->pipe.instr_name);
 }
 
 /* ==================== JSON 输出函数 ==================== */
