@@ -1,0 +1,10 @@
+                            | # Print three numbers
+0x000: 30f40001000000000000 | 	irmovq $0x100,%rsp  # Initialize stack pointer
+0x00a: 30f09a02000000000000 | 	irmovq $666,%rax    # Load 666 to %rax
+0x014: c000                 | 	prt %rax            # Print 666
+0x016: 30f00903000000000000 | 	irmovq $777,%rax    # Load 777 to %rax
+0x020: c000                 | 	prt %rax            # Print 777
+0x022: 30f07803000000000000 | 	irmovq $888,%rax    # Load 888 to %rax
+0x02c: c000                 | 	prt %rax            # Print 888
+0x02e: 30f00000000000000000 | 	irmovq $0,%rax      # Load 0 for return value
+0x038: 00                   | 	halt                # Halt (return 0)

@@ -1,0 +1,9 @@
+| # Multiply two numbers
+0x000: 30f00100000000000000 | 	irmovq $0x100,%rsp  # Initialize stack pointer
+0x00a: 30f00200000000000000 | 	irmovq $2,%rax      # i = 2
+0x014: 30f90000000000000000 | 	irmovq $0,%rcx      # 结果清零
+0x01e: 6001                 | 	addq %rax,%rcx      # 第一次加：0 + 2 = 2
+0x020: 6001                 | 	addq %rax,%rcx      # 第二次加：2 + 2 = 4
+0x022: 6001                 | 	addq %rax,%rcx      # 第三次加：4 + 2 = 6
+0x024: c010                 | 	prt %rcx            # 打印结果 (应该是 %rcx)
+0x026: 00                   | 	halt
