@@ -12,6 +12,12 @@
  * 流程：取指 -> 译码 -> 执行 -> 访存 -> 写回 -> PC 更新
  */
 
+/*
+关于get_XXX 与 fetch_XXX
+get：   查看并返回数值，不自动更新pc(cpu, some_addr, &ok)
+fetch： 取指，自动更新pc(cpu, &opcode)
+*/
+
 /* ===== 常量与枚举 ===== */
 #define MEM_SIZE (1<<20) /* 1MB 模拟内存 */
 
@@ -103,10 +109,13 @@ static uint64_t alu(cpu_t *c, uint8_t f, uint64_t a, uint64_t b) {
         case A_AND: R = B & A; break;
         case A_XOR: R = B ^ A; break;
     }
+
     uint64_t res = (uint64_t)R;
+
     c->ZF = (res == 0);
     c->SF = ((long long)res < 0);
     c->OF = of;
+
     return res;
 }
 
@@ -143,14 +152,22 @@ static void step(cpu_t *c){
     bool ok;
     uint64_t start_pc = c->pc; /* 记录本条指令的起始地址，HALT 等用 */
 #define ADR_FAIL do { c->status = STAT_ADR; c->pc = start_pc; return; } while(0)
-    uint8_t b0 = get_byte(c, c->pc, &ok);
-    if(!ok){ c->status = STAT_ADR; return; }
+    
+    //复用fetch_byte函数
+    uint8_t b0;
+    if(!fetch_byte(c,&b0))  return;
     ins.icode = (b0 >> 4) & 0xF;
     ins.ifun  = (b0 & 0xF);
-    c->pc += 1;
+
+    // uint8_t b0 = get_byte(c, c->pc, &ok);
+    // if(!ok){ c->status = STAT_ADR; return; }
+    // ins.icode = (b0 >> 4) & 0xF;
+    // ins.ifun  = (b0 & 0xF);
+    // c->pc += 1;
+
     ins.valP = c->pc; /* 当前取指后位置，作为默认下一条 PC */
 
-    /* 译码：根据指令格式取 rA/rB/valC */
+    /* 译码：根据指令格式读取 rA/rB/valC */
     switch (ins.icode) {
         case I_RRMOVQ: case I_OPQ: case I_PUSHQ: case I_POPQ:
             if(!fetch_reg(c,&ins.rA,&ins.rB)) return;
@@ -411,7 +428,8 @@ int main(int argc, char *argv[]) {
             step(cpu);
             print_json(cpu);
         }
-    } else {
+    } 
+    else {
         uint64_t steps = 0;
         printf("[");
         do{

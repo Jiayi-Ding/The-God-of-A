@@ -1,0 +1,5 @@
+0x000: 30f00002000000000000 |     irmovq $2, %rax    # i = 2
+0x00a: 30f10003000000000000 |     irmovq $3, %rcx    # j = 3
+0x014: 6030                 |     mulq %rax, %rcx    # %rcx = i * j (k)
+0x016: c030                 |     prt %rcx          # 打印 k (假设%rcx=3，所以机器码为c03Af)
+0x019: 00                   |     halt
