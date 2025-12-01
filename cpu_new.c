@@ -31,7 +31,7 @@ enum reg_id {
 enum icode {
     I_HALT=0, I_NOP=1, I_RRMOVQ=2, I_IRMOVQ=3, I_RMMOVQ=4,
     I_MRMOVQ=5, I_OPQ=6, I_JXX=7, I_CALL=8,
-    I_RET=9, I_PUSHQ=0xA, I_POPQ=0xB, I_PRT=0xC, I_SET=0xD
+    I_RET=9, I_PUSHQ=0xA, I_POPQ=0xB, I_PRT=0xC
 };
 
 enum op_fun { A_ADD=0, A_SUB=1, A_AND=2, A_XOR=3 };
@@ -144,6 +144,20 @@ static bool fetch_long(cpu_t *c, uint64_t *v) {
     return true;
 }
 
+/* 带地址错误处理的 8 字节读内存封装 */    //这是添加了的
+static bool load_long_or_fail(cpu_t *c, uint64_t addr,
+                              uint64_t *out, uint64_t start_pc) {
+    bool ok;
+    *out = get_long(c, addr, &ok);
+    if (!ok) {
+        /* 统一的地址错误处理逻辑 */
+        c->status = STAT_ADR;
+        c->pc = start_pc;
+        return false;
+    }
+    return true;
+}
+
 /* ===== 单步执行 ===== */
 static void step(cpu_t *c){
     if (c->status != STAT_AOK) return;
@@ -154,17 +168,15 @@ static void step(cpu_t *c){
 #define ADR_FAIL do { c->status = STAT_ADR; c->pc = start_pc; return; } while(0)
     
     //复用fetch_byte函数
-    uint8_t b0;
+    uint8_t b0={0};
     if(!fetch_byte(c,&b0))  return;
-    ins.icode = (b0 >> 4) & 0xF;
-    ins.ifun  = (b0 & 0xF);
 
     // uint8_t b0 = get_byte(c, c->pc, &ok);
     // if(!ok){ c->status = STAT_ADR; return; }
-    // ins.icode = (b0 >> 4) & 0xF;
-    // ins.ifun  = (b0 & 0xF);
     // c->pc += 1;
 
+    ins.icode = (b0 >> 4) & 0xF;
+    ins.ifun  = (b0 & 0xF);
     ins.valP = c->pc; /* 当前取指后位置，作为默认下一条 PC */
 
     /* 译码：根据指令格式读取 rA/rB/valC */
@@ -173,13 +185,11 @@ static void step(cpu_t *c){
             if(!fetch_reg(c,&ins.rA,&ins.rB)) return;
             break;
         case I_PRT:
-            if(!fetch_reg(c,&ins.rA,&ins.rB)) return;
-            if(ins.ifun == 1){
-                if(!fetch_long(c,&ins.valC)) return;
+            //if reg
+            if(ins.ifun == 0){
+                if(!fetch_reg(c,&ins.rA,&ins.rB)) return;
             }
-            break;
-        case I_SET:
-            if(!fetch_reg(c,&ins.rA,&ins.rB)) return;
+            //if addr
             if(ins.ifun == 1){
                 if(!fetch_long(c,&ins.valC)) return;
             }
@@ -260,27 +270,13 @@ static void step(cpu_t *c){
             break;
         }
         case I_PRT:
-            if(ins.ifun == 0 && ins.rA < 15){
+            if(ins.ifun == 0 ){
                 printf("%ld\n", (int64_t)c->reg[ins.rA]);
-            } else if(ins.ifun == 1){
+            } 
+            else if(ins.ifun == 1){
                 uint64_t val = get_long(c, ins.valC, &ok);
                 if(!ok){ ADR_FAIL; }
                 printf("MEM[%" PRIu64 "] : %ld\n", ins.valC, (int64_t)val);
-            }
-            break;
-        case I_SET:
-            if(ins.ifun == 0 && ins.rA < 15){
-                int input;
-                printf("Input an integer in range for int8_t: ");
-                if (scanf(" %d", &input) != 1) { c->status = STAT_INS; return; }
-                if(input > 127 || input < -128){ c->status = STAT_INS; return; }
-                c->reg[ins.rA] = (uint64_t)(int8_t)input;
-            } else if(ins.ifun == 1){
-                int input;
-                printf("Input an integer for MEM[%" PRIu64 "]: ", ins.valC);
-                if (scanf(" %d", &input) != 1) { c->status = STAT_INS; return; }
-                if(input > 127 || input < -128){ c->status = STAT_INS; return; }
-                if(!set_long(c, ins.valC, (uint64_t)(int8_t)input)){ ADR_FAIL; }
             }
             break;
         default:
