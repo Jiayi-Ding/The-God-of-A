@@ -163,7 +163,7 @@ static void step(cpu_t *c){
     if (c->status != STAT_AOK) return;
 
     instr_t ins = {0};
-    bool ok;
+    //bool ok;
     uint64_t start_pc = c->pc; /* 记录本条指令的起始地址，HALT 等用 */
 #define ADR_FAIL do { c->status = STAT_ADR; c->pc = start_pc; return; } while(0)
     
@@ -228,11 +228,18 @@ static void step(cpu_t *c){
             if(!set_long(c, addr, c->reg[ins.rA])) { ADR_FAIL; }
             break;
         }
+        // case I_MRMOVQ: {
+        //     uint64_t addr = c->reg[ins.rB] + ins.valC;
+        //     uint64_t v = get_long(c, addr, &ok);
+        //     if(!ok){ ADR_FAIL; }
+        //     if(ins.rA < 15) c->reg[ins.rA] = v;
+        //     break;
+        // }
         case I_MRMOVQ: {
             uint64_t addr = c->reg[ins.rB] + ins.valC;
-            uint64_t v = get_long(c, addr, &ok);
-            if(!ok){ ADR_FAIL; }
-            if(ins.rA < 15) c->reg[ins.rA] = v;
+            uint64_t v;
+            if (!load_long_or_fail(c, addr, &v, start_pc)) return;
+            if (ins.rA < 15) c->reg[ins.rA] = v;
             break;
         }
         case I_OPQ:
@@ -247,9 +254,16 @@ static void step(cpu_t *c){
             if(!set_long(c, c->reg[RSP], ins.valP)) { ADR_FAIL; }
             c->pc = ins.valC;
             break;
+        // case I_RET: {
+        //     uint64_t dest = get_long(c, c->reg[RSP], &ok);
+        //     if(!ok){ ADR_FAIL; }
+        //     c->reg[RSP] += 8;
+        //     c->pc = dest;
+        //     break;
+        // }
         case I_RET: {
-            uint64_t dest = get_long(c, c->reg[RSP], &ok);
-            if(!ok){ ADR_FAIL; }
+            uint64_t dest;
+            if (!load_long_or_fail(c, c->reg[RSP], &dest, start_pc)) return;
             c->reg[RSP] += 8;
             c->pc = dest;
             break;
@@ -261,24 +275,44 @@ static void step(cpu_t *c){
             if(!set_long(c, c->reg[RSP], valA)) { ADR_FAIL; }
             break;
         }
+        // case I_POPQ: {
+        //     if(ins.rA >= 15) { c->reg[RSP] += 8; break; }
+        //     uint64_t v = get_long(c, c->reg[RSP], &ok);
+        //     if(!ok){ ADR_FAIL; }
+        //     c->reg[RSP] += 8;
+        //     c->reg[ins.rA] = v;
+        //     break;
+        // }
         case I_POPQ: {
-            if(ins.rA >= 15) { c->reg[RSP] += 8; break; }
-            uint64_t v = get_long(c, c->reg[RSP], &ok);
-            if(!ok){ ADR_FAIL; }
+            if (ins.rA >= 15) { c->reg[RSP] += 8; break; }
+            uint64_t v;
+            if (!load_long_or_fail(c, c->reg[RSP], &v, start_pc)) return;
             c->reg[RSP] += 8;
             c->reg[ins.rA] = v;
             break;
         }
-        case I_PRT:
+        // case I_PRT:{
+        //     if(ins.ifun == 0 ){
+        //         printf("%ld\n", (int64_t)c->reg[ins.rA]);
+        //     } 
+        //     else if(ins.ifun == 1){
+        //         uint64_t val = get_long(c, ins.valC, &ok);
+        //         if(!ok){ ADR_FAIL; }
+        //         printf("MEM[%" PRIu64 "] : %ld\n", ins.valC, (int64_t)val);
+        //     }
+        //     break;
+        // }
+        case I_PRT:{
             if(ins.ifun == 0 ){
-                printf("%ld\n", (int64_t)c->reg[ins.rA]);
+                printf("\n%ld\n", (int64_t)c->reg[ins.rA]);
             } 
             else if(ins.ifun == 1){
-                uint64_t val = get_long(c, ins.valC, &ok);
-                if(!ok){ ADR_FAIL; }
-                printf("MEM[%" PRIu64 "] : %ld\n", ins.valC, (int64_t)val);
+                uint64_t val = {0};
+                if (!load_long_or_fail(c, ins.valC, &val, start_pc)) return;
+                printf("\n%ld\n", (int64_t)val);
             }
             break;
+        }
         default:
             c->status = STAT_INS;
     }
