@@ -858,7 +858,7 @@ static void pc_update_stage(cpu_state_t       *S,
     //.Add..
     if(F->icode == IPRT ){
         if(F->ifun == 0)
-            printf("%ld",D->valA);
+            printf("\n%ld\n",D->valA);
     }
     
     // 2. 再按 HCL 规则计算 new_pc
