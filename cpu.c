@@ -136,7 +136,7 @@ static bool mem_write_word(mem_t *mem, addr_t addr, word_t val) {
 //  取指输出结构体
 typedef struct {
     bool   imem_error;   // 取指是否越界/失败
-    bool   instr_invalid;  // icode 是否为合法指令
+    bool   instr_valid;  // icode 是否为合法指令
 
     int    icode;        // 指令码
     int    ifun;         // 功能码
@@ -152,7 +152,7 @@ typedef struct {
 } fetch_out_t;
 
 // 检查icode是否合法（ 落在 0..IPOPQ 之间就算合法
-static bool instr_invalid(int icode) {
+static bool instr_valid(int icode) {
     return icode >= IHALT && icode <= IPRT;
 }
 
@@ -222,7 +222,7 @@ fetch_out_t fetch_stage(const cpu_state_t *S) {
 
     // 先给所有字段填一个“保守默认值”
     F.imem_error  = false;
-    F.instr_invalid = false;
+    F.instr_valid = true;
 
     F.icode = INOP;          // 默认空操作
     F.ifun  = 0;
@@ -248,7 +248,7 @@ fetch_out_t fetch_stage(const cpu_state_t *S) {
     split_icode_ifun(byte0, &F.icode, &F.ifun);
 
     // 3. 判断是否合法、是否需要寄存器字节 / 立即数
-    F.instr_invalid = instr_invalid(F.icode);
+    F.instr_valid = instr_valid(F.icode);
     F.need_regids = need_regids(F.icode);
     F.need_valC   = need_valC(F.icode);
 
@@ -781,10 +781,10 @@ void writeback_stage(cpu_state_t       *S,
 
 //////////////////////////////////// PC update //////////////////////////////////////
 // 综合各种错误计算最终状态
-// 根据 imem_error / dmem_error / instr_invalid / icode 计算 Stat
+// 根据 imem_error / dmem_error / instr_valid / icode 计算 Stat
 static stat_t compute_stat(bool imem_error,
                            bool dmem_error,
-                           bool instr_invalid,
+                           bool instr_valid,
                            int icode)
 {
     // 地址错误优先（取指 or 访存）
@@ -793,7 +793,7 @@ static stat_t compute_stat(bool imem_error,
     }
 
     // 非法指令
-    if (!instr_invalid) {
+    if (!instr_valid) {
         return SINS;
     }
 
@@ -845,7 +845,7 @@ static void pc_update_stage(cpu_state_t       *S,
     // 1. 计算新状态：先根据错误 / 指令类型计算 Stat
     S->stat = compute_stat(F->imem_error,
                            M->dmem_error,
-                           F->instr_invalid,
+                           F->instr_valid,
                            F->icode);
     // 若状态异常（不是 SAOK），则保持 PC 在当前指令起始地址
     if (S->stat != SAOK) {
